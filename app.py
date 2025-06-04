@@ -1,45 +1,53 @@
+import os
+import warnings
 import streamlit as st
-from haystack.document_stores import InMemoryDocumentStore
-from haystack.nodes import BM25Retriever
-from haystack.pipelines import DocumentSearchPipeline
-from haystack.utils import convert_files_to_docs
-from pathlib import Path
+from dotenv import load_dotenv
+from haystack import Pipeline
+from haystack.utils import Document
+from haystack.components.embedders import OpenAITextEmbedder
+from haystack.components.retrievers.in_memory import InMemoryEmbeddingRetriever
+from haystack.document_stores.in_memory import InMemoryDocumentStore
 
-st.set_page_config(page_title="Recherche simple", layout="wide")
-st.title("🔍 Recherche par mot-clé")
+warnings.filterwarnings("ignore")
+load_dotenv()
 
-UPLOAD_DIR = Path("uploaded_docs")
-UPLOAD_DIR.mkdir(exist_ok=True)
+st.set_page_config(page_title="Recherche IA dans vos documents")
+st.title("📄 Recherche intelligente avec Haystack")
 
-@st.cache_resource
-def load_pipeline():
-    document_store = InMemoryDocumentStore()
-    retriever = BM25Retriever(document_store=document_store)
-    pipeline = DocumentSearchPipeline(retriever)
-    return document_store, pipeline
-
-document_store, pipeline = load_pipeline()
-
-uploaded_files = st.file_uploader("Upload .txt or .docx files", type=["txt", "docx"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Déposez vos fichiers ici", type=["txt", "pdf", "docx"], accept_multiple_files=True)
 
 if uploaded_files:
+    documents = []
+
     for file in uploaded_files:
-        file_path = UPLOAD_DIR / file.name
-        with open(file_path, "wb") as f:
-            f.write(file.getbuffer())
-    st.success(f"{len(uploaded_files)} fichiers chargés.")
-    docs = convert_files_to_docs(dir_path=str(UPLOAD_DIR))
-    document_store.write_documents(docs)
+        content = file.read().decode("utf-8", errors="ignore")
+        documents.append(Document(content=content, meta={"name": file.name, "path": "upload"}))
 
-query = st.text_input("Entrez un mot-clé ou une phrase à rechercher :")
+    st.success("✅ Fichiers bien reçus !")
 
-if st.button("Rechercher") and query:
-    result = pipeline.run(query=query, params={"Retriever": {"top_k": 5}})
-    docs = result.get("documents", [])
+    question = st.text_input("Que cherchez-vous ?")
 
-    if not docs:
-        st.warning("Aucun résultat.")
-    else:
-        for i, doc in enumerate(docs, 1):
-            st.markdown(f"**{i}.** {doc.content[:300]}...")
-            st.caption(f"From file: {doc.meta.get('name', 'inconnu')}")
+    if question:
+        with st.spinner("Recherche en cours..."):
+            document_store = InMemoryDocumentStore()
+            document_store.write_documents(documents)
+
+            embedder = OpenAITextEmbedder()
+            retriever = InMemoryEmbeddingRetriever(document_store=document_store)
+
+            pipeline = Pipeline()
+            pipeline.add_component("query_embedder", embedder)
+            pipeline.add_component("retriever", retriever)
+            pipeline.connect("query_embedder.embedding", "retriever.query_embedding")
+
+            results = pipeline.run({"query_embedder": {"text": question}})
+            docs = results["retriever"]["documents"]
+
+            if docs:
+                top_doc = docs[0]
+                st.markdown("### 📌 Résultat")
+                st.write(top_doc.content)
+                st.caption(f"Match in `{top_doc.meta['name']}` --> `{top_doc.meta['path']}`")
+            else:
+                st.warning("No match found.")
+
