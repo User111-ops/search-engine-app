@@ -1,3 +1,4 @@
-streamlit==1.32.0
-haystack==0.42
-python-docx
+streamlit
+haystack-ai==2.0.0
+python-dotenv
+openai
